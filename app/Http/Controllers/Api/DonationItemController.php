@@ -3,134 +3,136 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Contracts\Services\DonationItemServiceInterface;
+use App\Http\Requests\Api\StoreDonationItemRequest;
+use App\Http\Requests\Api\UpdateDonationItemRequest;
 use App\Models\DonationItem;
-use App\Models\Category;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Validator;
 
 /**
  * @OA\Tag(
  *     name="Donation Items",
- *     description="Operações relacionadas aos itens de doação"
+ *     description="Endpoints para gerenciamento de itens de doação"
  * )
  */
 class DonationItemController extends Controller
 {
+    public function __construct(
+        private DonationItemServiceInterface $donationItemService
+    ) {}
+
     /**
      * @OA\Get(
      *     path="/api/donation-items",
      *     summary="Listar itens de doação",
      *     tags={"Donation Items"},
      *     @OA\Parameter(
+     *         name="page",
+     *         in="query",
+     *         @OA\Schema(type="integer", example=1)
+     *     ),
+     *     @OA\Parameter(
+     *         name="per_page",
+     *         in="query",
+     *         @OA\Schema(type="integer", example=15)
+     *     ),
+     *     @OA\Parameter(
      *         name="category_id",
      *         in="query",
-     *         @OA\Schema(type="integer")
+     *         @OA\Schema(type="integer", example=1)
      *     ),
      *     @OA\Parameter(
      *         name="location",
      *         in="query",
-     *         @OA\Schema(type="string")
+     *         @OA\Schema(type="string", example="São Paulo")
      *     ),
      *     @OA\Parameter(
-     *         name="status",
+     *         name="condition",
      *         in="query",
-     *         @OA\Schema(type="string", enum={"available", "reserved", "donated"})
+     *         @OA\Schema(type="string", example="Usado - Bom estado")
+     *     ),
+     *     @OA\Parameter(
+     *         name="search",
+     *         in="query",
+     *         @OA\Schema(type="string", example="sofá")
      *     ),
      *     @OA\Response(
      *         response=200,
-     *         description="Lista de itens de doação"
+     *         description="Lista de itens de doação",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="data", type="array", @OA\Items(ref="#/components/schemas/DonationItem"))
+     *         )
      *     )
      * )
      */
-    public function index(Request $request)
+    public function index(Request $request): JsonResponse
     {
-        $query = DonationItem::with(['user', 'category'])
-            ->available()
-            ->latest();
+        try {
+            $filters = $request->only(['category_id', 'location', 'condition', 'search']);
+            $perPage = $request->get('per_page', 15);
+            
+            $items = $this->donationItemService->getAvailableItems($filters, $perPage);
 
-        // Filtros
-        if ($request->has('category_id')) {
-            $query->where('category_id', $request->category_id);
+            return response()->json($items);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Erro interno do servidor',
+                'message' => $e->getMessage()
+            ], 500);
         }
-
-        if ($request->has('location')) {
-            $query->where('location', 'like', '%' . $request->location . '%');
-        }
-
-        if ($request->has('status')) {
-            $query->where('status', $request->status);
-        }
-
-        $items = $query->paginate(15);
-
-        return response()->json($items);
     }
 
     /**
      * @OA\Post(
      *     path="/api/donation-items",
-     *     summary="Criar novo item de doação",
+     *     summary="Criar item de doação",
      *     tags={"Donation Items"},
      *     security={{"bearerAuth":{}}},
      *     @OA\RequestBody(
      *         required=true,
      *         @OA\JsonContent(
-     *             required={"title", "description", "category_id", "condition", "location"},
-     *             @OA\Property(property="title", type="string"),
-     *             @OA\Property(property="description", type="string"),
-     *             @OA\Property(property="category_id", type="integer"),
-     *             @OA\Property(property="condition", type="string"),
-     *             @OA\Property(property="location", type="string"),
-     *             @OA\Property(property="images", type="array", @OA\Items(type="string")),
-     *             @OA\Property(property="latitude", type="number"),
-     *             @OA\Property(property="longitude", type="number")
+     *             required={"title","description","category_id","condition","location"},
+     *             @OA\Property(property="title", type="string", example="Sofá 3 lugares"),
+     *             @OA\Property(property="description", type="string", example="Sofá em bom estado, cor azul"),
+     *             @OA\Property(property="category_id", type="integer", example=1),
+     *             @OA\Property(property="condition", type="string", example="Usado - Bom estado"),
+     *             @OA\Property(property="location", type="string", example="São Paulo, SP"),
+     *             @OA\Property(property="latitude", type="number", example=-23.5505),
+     *             @OA\Property(property="longitude", type="number", example=-46.6333),
+     *             @OA\Property(property="images", type="array", @OA\Items(type="string"))
      *         )
      *     ),
      *     @OA\Response(
      *         response=201,
-     *         description="Item criado com sucesso"
+     *         description="Item criado com sucesso",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Item criado com sucesso"),
+     *             @OA\Property(property="data", ref="#/components/schemas/DonationItem")
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=422,
+     *         description="Erro de validação",
+     *         @OA\JsonContent(ref="#/components/schemas/Error")
      *     )
      * )
      */
-    public function store(Request $request)
+    public function store(StoreDonationItemRequest $request): JsonResponse
     {
-        $validator = Validator::make($request->all(), [
-            'title' => 'required|string|max:255',
-            'description' => 'required|string',
-            'category_id' => 'required|exists:categories,id',
-            'condition' => 'required|string|max:255',
-            'location' => 'required|string|max:255',
-            'images' => 'nullable|array',
-            'images.*' => 'string|url',
-            'latitude' => 'nullable|numeric|between:-90,90',
-            'longitude' => 'nullable|numeric|between:-180,180',
-        ]);
+        try {
+            $item = $this->donationItemService->create($request->user(), $request->validated());
 
-        if ($validator->fails()) {
             return response()->json([
-                'error' => 'Dados inválidos',
-                'messages' => $validator->errors()
-            ], 422);
+                'message' => 'Item criado com sucesso',
+                'data' => $item
+            ], 201);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Erro interno do servidor',
+                'message' => $e->getMessage()
+            ], 500);
         }
-
-        $item = DonationItem::create([
-            'user_id' => $request->user()->id,
-            'category_id' => $request->category_id,
-            'title' => $request->title,
-            'description' => $request->description,
-            'condition' => $request->condition,
-            'location' => $request->location,
-            'images' => $request->images,
-            'latitude' => $request->latitude,
-            'longitude' => $request->longitude,
-        ]);
-
-        $item->load(['user', 'category']);
-
-        return response()->json([
-            'message' => 'Item criado com sucesso',
-            'data' => $item
-        ], 201);
     }
 
     /**
@@ -146,17 +148,33 @@ class DonationItemController extends Controller
      *     ),
      *     @OA\Response(
      *         response=200,
-     *         description="Detalhes do item"
+     *         description="Dados do item",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="data", ref="#/components/schemas/DonationItem"),
+     *             @OA\Property(property="related_items", type="array", @OA\Items(ref="#/components/schemas/DonationItem"))
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=404,
+     *         description="Item não encontrado"
      *     )
      * )
      */
-    public function show(DonationItem $donationItem)
+    public function show(DonationItem $donationItem): JsonResponse
     {
-        $donationItem->load(['user', 'category', 'reviews.reviewer']);
+        try {
+            $relatedItems = $this->donationItemService->getRelatedItems($donationItem);
 
-        return response()->json([
-            'data' => $donationItem
-        ]);
+            return response()->json([
+                'data' => $donationItem,
+                'related_items' => $relatedItems
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Erro interno do servidor',
+                'message' => $e->getMessage()
+            ], 500);
+        }
     }
 
     /**
@@ -171,52 +189,49 @@ class DonationItemController extends Controller
      *         required=true,
      *         @OA\Schema(type="integer")
      *     ),
+     *     @OA\RequestBody(
+     *         required=true,
+     *         @OA\JsonContent(
+     *             @OA\Property(property="title", type="string", example="Sofá 3 lugares"),
+     *             @OA\Property(property="description", type="string", example="Sofá em bom estado, cor azul"),
+     *             @OA\Property(property="category_id", type="integer", example=1),
+     *             @OA\Property(property="condition", type="string", example="Usado - Bom estado"),
+     *             @OA\Property(property="location", type="string", example="São Paulo, SP"),
+     *             @OA\Property(property="latitude", type="number", example=-23.5505),
+     *             @OA\Property(property="longitude", type="number", example=-46.6333),
+     *             @OA\Property(property="images", type="array", @OA\Items(type="string"))
+     *         )
+     *     ),
      *     @OA\Response(
      *         response=200,
-     *         description="Item atualizado com sucesso"
+     *         description="Item atualizado com sucesso",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Item atualizado com sucesso"),
+     *             @OA\Property(property="data", ref="#/components/schemas/DonationItem")
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=403,
+     *         description="Sem permissão para modificar este item",
+     *         @OA\JsonContent(ref="#/components/schemas/Error")
      *     )
      * )
      */
-    public function update(Request $request, DonationItem $donationItem)
+    public function update(UpdateDonationItemRequest $request, DonationItem $donationItem): JsonResponse
     {
-        // Verificar se o usuário é o dono do item
-        if ($donationItem->user_id !== $request->user()->id) {
+        try {
+            $item = $this->donationItemService->update($donationItem, $request->user(), $request->validated());
+
             return response()->json([
-                'error' => 'Não autorizado'
+                'message' => 'Item atualizado com sucesso',
+                'data' => $item
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Erro ao atualizar item',
+                'message' => $e->getMessage()
             ], 403);
         }
-
-        $validator = Validator::make($request->all(), [
-            'title' => 'sometimes|string|max:255',
-            'description' => 'sometimes|string',
-            'category_id' => 'sometimes|exists:categories,id',
-            'condition' => 'sometimes|string|max:255',
-            'location' => 'sometimes|string|max:255',
-            'images' => 'sometimes|nullable|array',
-            'images.*' => 'string|url',
-            'latitude' => 'sometimes|nullable|numeric|between:-90,90',
-            'longitude' => 'sometimes|nullable|numeric|between:-180,180',
-            'status' => 'sometimes|in:available,reserved,donated',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'error' => 'Dados inválidos',
-                'messages' => $validator->errors()
-            ], 422);
-        }
-
-        $donationItem->update($request->only([
-            'title', 'description', 'category_id', 'condition', 
-            'location', 'images', 'latitude', 'longitude', 'status'
-        ]));
-
-        $donationItem->load(['user', 'category']);
-
-        return response()->json([
-            'message' => 'Item atualizado com sucesso',
-            'data' => $donationItem
-        ]);
     }
 
     /**
@@ -233,24 +248,32 @@ class DonationItemController extends Controller
      *     ),
      *     @OA\Response(
      *         response=200,
-     *         description="Item excluído com sucesso"
+     *         description="Item excluído com sucesso",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Item excluído com sucesso")
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=403,
+     *         description="Sem permissão para excluir este item",
+     *         @OA\JsonContent(ref="#/components/schemas/Error")
      *     )
      * )
      */
-    public function destroy(Request $request, DonationItem $donationItem)
+    public function destroy(DonationItem $donationItem, Request $request): JsonResponse
     {
-        // Verificar se o usuário é o dono do item
-        if ($donationItem->user_id !== $request->user()->id) {
+        try {
+            $this->donationItemService->delete($donationItem, $request->user());
+
             return response()->json([
-                'error' => 'Não autorizado'
+                'message' => 'Item excluído com sucesso'
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Erro ao excluir item',
+                'message' => $e->getMessage()
             ], 403);
         }
-
-        $donationItem->delete();
-
-        return response()->json([
-            'message' => 'Item excluído com sucesso'
-        ]);
     }
 
     /**
@@ -259,20 +282,38 @@ class DonationItemController extends Controller
      *     summary="Listar meus itens de doação",
      *     tags={"Donation Items"},
      *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(
+     *         name="page",
+     *         in="query",
+     *         @OA\Schema(type="integer", example=1)
+     *     ),
+     *     @OA\Parameter(
+     *         name="per_page",
+     *         in="query",
+     *         @OA\Schema(type="integer", example=15)
+     *     ),
      *     @OA\Response(
      *         response=200,
-     *         description="Lista dos meus itens"
+     *         description="Lista dos meus itens de doação",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="data", type="array", @OA\Items(ref="#/components/schemas/DonationItem"))
+     *         )
      *     )
      * )
      */
-    public function myDonations(Request $request)
+    public function myDonations(Request $request): JsonResponse
     {
-        $items = DonationItem::with(['category'])
-            ->where('user_id', $request->user()->id)
-            ->latest()
-            ->paginate(15);
+        try {
+            $perPage = $request->get('per_page', 15);
+            $items = $this->donationItemService->getUserItems($request->user(), $perPage);
 
-        return response()->json($items);
+            return response()->json($items);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Erro interno do servidor',
+                'message' => $e->getMessage()
+            ], 500);
+        }
     }
 }
 

@@ -3,102 +3,174 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
-use App\Models\User;
+use App\Contracts\Services\AuthServiceInterface;
+use App\Http\Requests\Auth\RegisterRequest;
+use App\Http\Requests\Auth\LoginRequest;
+use App\Http\Requests\Auth\UpdateProfileRequest;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Validator;
 
+/**
+ * @OA\Tag(
+ *     name="Authentication",
+ *     description="Endpoints para autenticação de usuários"
+ * )
+ */
 class AuthController extends Controller
 {
-    /**
-     * Registro de novo usuário
-     */
-    public function register(Request $request)
-    {
-        $validator = Validator::make($request->all(), [
-            'name' => 'required|string|max:255',
-            'email' => 'required|string|email|max:255|unique:users',
-            'password' => 'required|string|min:8|confirmed',
-            'phone' => 'nullable|string|max:20',
-            'location' => 'nullable|string|max:255',
-        ]);
+    public function __construct(
+        private AuthServiceInterface $authService
+    ) {}
 
-        if ($validator->fails()) {
+    /**
+     * @OA\Post(
+     *     path="/api/auth/register",
+     *     summary="Registrar novo usuário",
+     *     tags={"Authentication"},
+     *     @OA\RequestBody(
+     *         required=true,
+     *         @OA\JsonContent(
+     *             required={"name","email","password","password_confirmation"},
+     *             @OA\Property(property="name", type="string", example="João Silva"),
+     *             @OA\Property(property="email", type="string", format="email", example="joao@example.com"),
+     *             @OA\Property(property="password", type="string", format="password", example="password123"),
+     *             @OA\Property(property="password_confirmation", type="string", format="password", example="password123"),
+     *             @OA\Property(property="phone", type="string", example="(11) 99999-9999"),
+     *             @OA\Property(property="location", type="string", example="São Paulo, SP")
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=201,
+     *         description="Usuário registrado com sucesso",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Usuário registrado com sucesso"),
+     *             @OA\Property(property="user", ref="#/components/schemas/User"),
+     *             @OA\Property(property="token", type="string", example="1|abc123..."),
+     *             @OA\Property(property="token_type", type="string", example="Bearer")
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=422,
+     *         description="Erro de validação",
+     *         @OA\JsonContent(ref="#/components/schemas/Error")
+     *     )
+     * )
+     */
+    public function register(RegisterRequest $request): JsonResponse
+    {
+        try {
+            $result = $this->authService->register($request->validated());
+
             return response()->json([
-                'error' => 'Dados inválidos',
-                'messages' => $validator->errors()
+                'message' => 'Usuário registrado com sucesso',
+                'user' => $result['user'],
+                'token' => $result['token'],
+                'token_type' => $result['token_type'],
+            ], 201);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Erro interno do servidor',
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * @OA\Post(
+     *     path="/api/auth/login",
+     *     summary="Fazer login",
+     *     tags={"Authentication"},
+     *     @OA\RequestBody(
+     *         required=true,
+     *         @OA\JsonContent(
+     *             required={"email","password"},
+     *             @OA\Property(property="email", type="string", format="email", example="joao@example.com"),
+     *             @OA\Property(property="password", type="string", format="password", example="password123")
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=200,
+     *         description="Login realizado com sucesso",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Login realizado com sucesso"),
+     *             @OA\Property(property="user", ref="#/components/schemas/User"),
+     *             @OA\Property(property="token", type="string", example="1|abc123..."),
+     *             @OA\Property(property="token_type", type="string", example="Bearer")
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=422,
+     *         description="Credenciais inválidas",
+     *         @OA\JsonContent(ref="#/components/schemas/Error")
+     *     )
+     * )
+     */
+    public function login(LoginRequest $request): JsonResponse
+    {
+        try {
+            $result = $this->authService->login($request->validated());
+
+            return response()->json([
+                'message' => 'Login realizado com sucesso',
+                'user' => $result['user'],
+                'token' => $result['token'],
+                'token_type' => $result['token_type'],
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Credenciais inválidas',
+                'message' => $e->getMessage()
             ], 422);
         }
-
-        $user = User::create([
-            'name' => $request->name,
-            'email' => $request->email,
-            'password' => Hash::make($request->password),
-            'phone' => $request->phone,
-            'location' => $request->location,
-        ]);
-
-        $token = $user->createToken('auth_token')->plainTextToken;
-
-        return response()->json([
-            'message' => 'Usuário registrado com sucesso',
-            'user' => $user,
-            'access_token' => $token,
-            'token_type' => 'Bearer',
-        ], 201);
     }
 
     /**
-     * Login do usuário
+     * @OA\Post(
+     *     path="/api/auth/logout",
+     *     summary="Fazer logout",
+     *     tags={"Authentication"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Response(
+     *         response=200,
+     *         description="Logout realizado com sucesso",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Logout realizado com sucesso")
+     *         )
+     *     )
+     * )
      */
-    public function login(Request $request)
+    public function logout(Request $request): JsonResponse
     {
-        $validator = Validator::make($request->all(), [
-            'email' => 'required|email',
-            'password' => 'required',
-        ]);
+        try {
+            $this->authService->logout($request->user());
 
-        if ($validator->fails()) {
             return response()->json([
-                'error' => 'Dados inválidos',
-                'messages' => $validator->errors()
-            ], 422);
-        }
-
-        if (!Auth::attempt($request->only('email', 'password'))) {
+                'message' => 'Logout realizado com sucesso'
+            ]);
+        } catch (\Exception $e) {
             return response()->json([
-                'error' => 'Credenciais inválidas'
-            ], 401);
+                'error' => 'Erro interno do servidor',
+                'message' => $e->getMessage()
+            ], 500);
         }
-
-        $user = User::where('email', $request->email)->firstOrFail();
-        $token = $user->createToken('auth_token')->plainTextToken;
-
-        return response()->json([
-            'message' => 'Login realizado com sucesso',
-            'user' => $user,
-            'access_token' => $token,
-            'token_type' => 'Bearer',
-        ]);
     }
 
     /**
-     * Logout do usuário
+     * @OA\Get(
+     *     path="/api/auth/user",
+     *     summary="Obter dados do usuário autenticado",
+     *     tags={"Authentication"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Response(
+     *         response=200,
+     *         description="Dados do usuário",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="user", ref="#/components/schemas/User")
+     *         )
+     *     )
+     * )
      */
-    public function logout(Request $request)
-    {
-        $request->user()->currentAccessToken()->delete();
-
-        return response()->json([
-            'message' => 'Logout realizado com sucesso'
-        ]);
-    }
-
-    /**
-     * Obtém informações do usuário autenticado
-     */
-    public function user(Request $request)
+    public function user(Request $request): JsonResponse
     {
         return response()->json([
             'user' => $request->user()
@@ -106,31 +178,53 @@ class AuthController extends Controller
     }
 
     /**
-     * Atualiza o perfil do usuário
+     * @OA\Put(
+     *     path="/api/auth/profile",
+     *     summary="Atualizar perfil do usuário",
+     *     tags={"Authentication"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\RequestBody(
+     *         required=true,
+     *         @OA\JsonContent(
+     *             @OA\Property(property="name", type="string", example="João Silva"),
+     *             @OA\Property(property="email", type="string", format="email", example="joao@example.com"),
+     *             @OA\Property(property="password", type="string", format="password", example="newpassword123"),
+     *             @OA\Property(property="password_confirmation", type="string", format="password", example="newpassword123"),
+     *             @OA\Property(property="phone", type="string", example="(11) 99999-9999"),
+     *             @OA\Property(property="location", type="string", example="São Paulo, SP"),
+     *             @OA\Property(property="avatar", type="string", example="https://example.com/avatar.jpg")
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=200,
+     *         description="Perfil atualizado com sucesso",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Perfil atualizado com sucesso"),
+     *             @OA\Property(property="user", ref="#/components/schemas/User")
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=422,
+     *         description="Erro de validação",
+     *         @OA\JsonContent(ref="#/components/schemas/Error")
+     *     )
+     * )
      */
-    public function updateProfile(Request $request)
+    public function updateProfile(UpdateProfileRequest $request): JsonResponse
     {
-        $validator = Validator::make($request->all(), [
-            'name' => 'sometimes|string|max:255',
-            'phone' => 'sometimes|nullable|string|max:20',
-            'location' => 'sometimes|nullable|string|max:255',
-            'avatar' => 'sometimes|nullable|string|max:255',
-        ]);
+        try {
+            $user = $this->authService->updateProfile($request->user(), $request->validated());
 
-        if ($validator->fails()) {
             return response()->json([
-                'error' => 'Dados inválidos',
-                'messages' => $validator->errors()
-            ], 422);
+                'message' => 'Perfil atualizado com sucesso',
+                'user' => $user
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Erro interno do servidor',
+                'message' => $e->getMessage()
+            ], 500);
         }
-
-        $user = $request->user();
-        $user->update($request->only(['name', 'phone', 'location', 'avatar']));
-
-        return response()->json([
-            'message' => 'Perfil atualizado com sucesso',
-            'user' => $user
-        ]);
     }
 }
 

@@ -3,91 +3,115 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Contracts\Services\CategoryServiceInterface;
+use App\Http\Requests\Api\StoreCategoryRequest;
+use App\Http\Requests\Api\UpdateCategoryRequest;
 use App\Models\Category;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Validator;
-use Illuminate\Support\Str;
 
 /**
  * @OA\Tag(
  *     name="Categories",
- *     description="Operações relacionadas às categorias"
+ *     description="Endpoints para gerenciamento de categorias"
  * )
  */
 class CategoryController extends Controller
 {
+    public function __construct(
+        private CategoryServiceInterface $categoryService
+    ) {}
+
     /**
      * @OA\Get(
      *     path="/api/categories",
-     *     summary="Listar todas as categorias",
+     *     summary="Listar categorias",
      *     tags={"Categories"},
+     *     @OA\Parameter(
+     *         name="page",
+     *         in="query",
+     *         @OA\Schema(type="integer", example=1)
+     *     ),
+     *     @OA\Parameter(
+     *         name="per_page",
+     *         in="query",
+     *         @OA\Schema(type="integer", example=15)
+     *     ),
      *     @OA\Response(
      *         response=200,
      *         description="Lista de categorias",
      *         @OA\JsonContent(
-     *             type="array",
-     *             @OA\Items(ref="#/components/schemas/Category")
+     *             @OA\Property(property="data", type="array", @OA\Items(ref="#/components/schemas/Category"))
      *         )
      *     )
      * )
      */
-    public function index()
+    public function index(Request $request): JsonResponse
     {
-        $categories = Category::active()->get();
-        
-        return response()->json([
-            'data' => $categories
-        ]);
+        try {
+            if ($request->has('paginate') && $request->paginate === 'false') {
+                $categories = $this->categoryService->getAllActive();
+                return response()->json(['data' => $categories]);
+            }
+
+            $perPage = $request->get('per_page', 15);
+            $categories = $this->categoryService->paginate($perPage);
+
+            return response()->json($categories);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Erro interno do servidor',
+                'message' => $e->getMessage()
+            ], 500);
+        }
     }
 
     /**
      * @OA\Post(
      *     path="/api/categories",
-     *     summary="Criar nova categoria",
+     *     summary="Criar categoria",
      *     tags={"Categories"},
      *     security={{"bearerAuth":{}}},
      *     @OA\RequestBody(
      *         required=true,
      *         @OA\JsonContent(
      *             required={"name"},
-     *             @OA\Property(property="name", type="string", example="Móveis"),
-     *             @OA\Property(property="description", type="string", example="Móveis para casa"),
-     *             @OA\Property(property="icon", type="string", example="furniture-icon")
+     *             @OA\Property(property="name", type="string", example="Eletrônicos"),
+     *             @OA\Property(property="description", type="string", example="Categoria para itens eletrônicos"),
+     *             @OA\Property(property="icon", type="string", example="electronics"),
+     *             @OA\Property(property="active", type="boolean", example=true)
      *         )
      *     ),
      *     @OA\Response(
      *         response=201,
      *         description="Categoria criada com sucesso",
-     *         @OA\JsonContent(ref="#/components/schemas/Category")
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Categoria criada com sucesso"),
+     *             @OA\Property(property="data", ref="#/components/schemas/Category")
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=422,
+     *         description="Erro de validação",
+     *         @OA\JsonContent(ref="#/components/schemas/Error")
      *     )
      * )
      */
-    public function store(Request $request)
+    public function store(StoreCategoryRequest $request): JsonResponse
     {
-        $validator = Validator::make($request->all(), [
-            'name' => 'required|string|max:255|unique:categories',
-            'description' => 'nullable|string',
-            'icon' => 'nullable|string|max:255',
-        ]);
+        try {
+            $category = $this->categoryService->create($request->validated());
 
-        if ($validator->fails()) {
             return response()->json([
-                'error' => 'Dados inválidos',
-                'messages' => $validator->errors()
-            ], 422);
+                'message' => 'Categoria criada com sucesso',
+                'data' => $category
+            ], 201);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Erro interno do servidor',
+                'message' => $e->getMessage()
+            ], 500);
         }
-
-        $category = Category::create([
-            'name' => $request->name,
-            'slug' => Str::slug($request->name),
-            'description' => $request->description,
-            'icon' => $request->icon,
-        ]);
-
-        return response()->json([
-            'message' => 'Categoria criada com sucesso',
-            'data' => $category
-        ], 201);
     }
 
     /**
@@ -103,16 +127,20 @@ class CategoryController extends Controller
      *     ),
      *     @OA\Response(
      *         response=200,
-     *         description="Detalhes da categoria",
-     *         @OA\JsonContent(ref="#/components/schemas/Category")
+     *         description="Dados da categoria",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="data", ref="#/components/schemas/Category")
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=404,
+     *         description="Categoria não encontrada"
      *     )
      * )
      */
-    public function show(Category $category)
+    public function show(Category $category): JsonResponse
     {
-        return response()->json([
-            'data' => $category
-        ]);
+        return response()->json(['data' => $category]);
     }
 
     /**
@@ -130,46 +158,42 @@ class CategoryController extends Controller
      *     @OA\RequestBody(
      *         required=true,
      *         @OA\JsonContent(
-     *             @OA\Property(property="name", type="string"),
-     *             @OA\Property(property="description", type="string"),
-     *             @OA\Property(property="icon", type="string"),
-     *             @OA\Property(property="active", type="boolean")
+     *             @OA\Property(property="name", type="string", example="Eletrônicos"),
+     *             @OA\Property(property="description", type="string", example="Categoria para itens eletrônicos"),
+     *             @OA\Property(property="icon", type="string", example="electronics"),
+     *             @OA\Property(property="active", type="boolean", example=true)
      *         )
      *     ),
      *     @OA\Response(
      *         response=200,
-     *         description="Categoria atualizada com sucesso"
+     *         description="Categoria atualizada com sucesso",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Categoria atualizada com sucesso"),
+     *             @OA\Property(property="data", ref="#/components/schemas/Category")
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=422,
+     *         description="Erro de validação",
+     *         @OA\JsonContent(ref="#/components/schemas/Error")
      *     )
      * )
      */
-    public function update(Request $request, Category $category)
+    public function update(UpdateCategoryRequest $request, Category $category): JsonResponse
     {
-        $validator = Validator::make($request->all(), [
-            'name' => 'sometimes|string|max:255|unique:categories,name,' . $category->id,
-            'description' => 'sometimes|nullable|string',
-            'icon' => 'sometimes|nullable|string|max:255',
-            'active' => 'sometimes|boolean',
-        ]);
+        try {
+            $category = $this->categoryService->update($category, $request->validated());
 
-        if ($validator->fails()) {
             return response()->json([
-                'error' => 'Dados inválidos',
-                'messages' => $validator->errors()
-            ], 422);
+                'message' => 'Categoria atualizada com sucesso',
+                'data' => $category
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Erro interno do servidor',
+                'message' => $e->getMessage()
+            ], 500);
         }
-
-        $updateData = $request->only(['name', 'description', 'icon', 'active']);
-        
-        if (isset($updateData['name'])) {
-            $updateData['slug'] = Str::slug($updateData['name']);
-        }
-
-        $category->update($updateData);
-
-        return response()->json([
-            'message' => 'Categoria atualizada com sucesso',
-            'data' => $category
-        ]);
     }
 
     /**
@@ -186,17 +210,32 @@ class CategoryController extends Controller
      *     ),
      *     @OA\Response(
      *         response=200,
-     *         description="Categoria excluída com sucesso"
+     *         description="Categoria excluída com sucesso",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Categoria excluída com sucesso")
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=400,
+     *         description="Categoria não pode ser excluída",
+     *         @OA\JsonContent(ref="#/components/schemas/Error")
      *     )
      * )
      */
-    public function destroy(Category $category)
+    public function destroy(Category $category): JsonResponse
     {
-        $category->delete();
+        try {
+            $this->categoryService->delete($category);
 
-        return response()->json([
-            'message' => 'Categoria excluída com sucesso'
-        ]);
+            return response()->json([
+                'message' => 'Categoria excluída com sucesso'
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Erro ao excluir categoria',
+                'message' => $e->getMessage()
+            ], 400);
+        }
     }
 }
 

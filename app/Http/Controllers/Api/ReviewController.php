@@ -3,133 +3,138 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Contracts\Services\ReviewServiceInterface;
+use App\Http\Requests\Api\StoreReviewRequest;
+use App\Http\Requests\Api\UpdateReviewRequest;
 use App\Models\Review;
-use App\Models\DonationItem;
 use App\Models\User;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Validator;
 
 /**
  * @OA\Tag(
  *     name="Reviews",
- *     description="Operações relacionadas às avaliações"
+ *     description="Endpoints para gerenciamento de avaliações"
  * )
  */
 class ReviewController extends Controller
 {
+    public function __construct(
+        private ReviewServiceInterface $reviewService
+    ) {}
+
     /**
      * @OA\Get(
      *     path="/api/reviews",
      *     summary="Listar avaliações",
      *     tags={"Reviews"},
      *     @OA\Parameter(
-     *         name="user_id",
+     *         name="page",
      *         in="query",
-     *         @OA\Schema(type="integer")
+     *         @OA\Schema(type="integer", example=1)
+     *     ),
+     *     @OA\Parameter(
+     *         name="per_page",
+     *         in="query",
+     *         @OA\Schema(type="integer", example=15)
+     *     ),
+     *     @OA\Parameter(
+     *         name="reviewed_user_id",
+     *         in="query",
+     *         @OA\Schema(type="integer", example=1)
+     *     ),
+     *     @OA\Parameter(
+     *         name="rating",
+     *         in="query",
+     *         @OA\Schema(type="integer", example=5)
      *     ),
      *     @OA\Response(
      *         response=200,
-     *         description="Lista de avaliações"
+     *         description="Lista de avaliações",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="data", type="array", @OA\Items(
+     *                 @OA\Property(property="id", type="integer"),
+     *                 @OA\Property(property="rating", type="integer"),
+     *                 @OA\Property(property="comment", type="string"),
+     *                 @OA\Property(property="reviewer", ref="#/components/schemas/User"),
+     *                 @OA\Property(property="reviewed_user", ref="#/components/schemas/User"),
+     *                 @OA\Property(property="donation_item", ref="#/components/schemas/DonationItem"),
+     *                 @OA\Property(property="created_at", type="string", format="date-time")
+     *             ))
+     *         )
      *     )
      * )
      */
-    public function index(Request $request)
+    public function index(Request $request): JsonResponse
     {
-        $query = Review::with(['reviewer', 'reviewedUser', 'donationItem']);
+        try {
+            $filters = $request->only(['reviewed_user_id', 'reviewer_id', 'rating']);
+            $perPage = $request->get('per_page', 15);
+            
+            $reviews = $this->reviewService->getReviews($filters, $perPage);
 
-        if ($request->has('user_id')) {
-            $query->forUser($request->user_id);
+            return response()->json($reviews);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Erro interno do servidor',
+                'message' => $e->getMessage()
+            ], 500);
         }
-
-        $reviews = $query->latest()->paginate(15);
-
-        return response()->json($reviews);
     }
 
     /**
      * @OA\Post(
      *     path="/api/reviews",
-     *     summary="Criar nova avaliação",
+     *     summary="Criar avaliação",
      *     tags={"Reviews"},
      *     security={{"bearerAuth":{}}},
      *     @OA\RequestBody(
      *         required=true,
      *         @OA\JsonContent(
-     *             required={"donation_item_id", "reviewed_user_id", "rating"},
-     *             @OA\Property(property="donation_item_id", type="integer"),
-     *             @OA\Property(property="reviewed_user_id", type="integer"),
-     *             @OA\Property(property="rating", type="integer", minimum=1, maximum=5),
-     *             @OA\Property(property="comment", type="string")
+     *             required={"donation_item_id","reviewed_user_id","rating"},
+     *             @OA\Property(property="donation_item_id", type="integer", example=1),
+     *             @OA\Property(property="reviewed_user_id", type="integer", example=2),
+     *             @OA\Property(property="rating", type="integer", example=5),
+     *             @OA\Property(property="comment", type="string", example="Excelente pessoa, muito educada!")
      *         )
      *     ),
      *     @OA\Response(
      *         response=201,
-     *         description="Avaliação criada com sucesso"
+     *         description="Avaliação criada com sucesso",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Avaliação criada com sucesso"),
+     *             @OA\Property(property="data", type="object",
+     *                 @OA\Property(property="id", type="integer"),
+     *                 @OA\Property(property="rating", type="integer"),
+     *                 @OA\Property(property="comment", type="string"),
+     *                 @OA\Property(property="reviewer", ref="#/components/schemas/User"),
+     *                 @OA\Property(property="reviewed_user", ref="#/components/schemas/User"),
+     *                 @OA\Property(property="donation_item", ref="#/components/schemas/DonationItem")
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=400,
+     *         description="Erro ao criar avaliação",
+     *         @OA\JsonContent(ref="#/components/schemas/Error")
      *     )
      * )
      */
-    public function store(Request $request)
+    public function store(StoreReviewRequest $request): JsonResponse
     {
-        $validator = Validator::make($request->all(), [
-            'donation_item_id' => 'required|exists:donation_items,id',
-            'reviewed_user_id' => 'required|exists:users,id',
-            'rating' => 'required|integer|min:1|max:5',
-            'comment' => 'nullable|string|max:1000',
-        ]);
+        try {
+            $review = $this->reviewService->create($request->user(), $request->validated());
 
-        if ($validator->fails()) {
             return response()->json([
-                'error' => 'Dados inválidos',
-                'messages' => $validator->errors()
-            ], 422);
-        }
-
-        $userId = $request->user()->id;
-        $donationItem = DonationItem::findOrFail($request->donation_item_id);
-
-        // Verificar se o usuário não está tentando avaliar a si mesmo
-        if ($request->reviewed_user_id === $userId) {
+                'message' => 'Avaliação criada com sucesso',
+                'data' => $review
+            ], 201);
+        } catch (\Exception $e) {
             return response()->json([
-                'error' => 'Você não pode avaliar a si mesmo'
-            ], 422);
+                'error' => 'Erro ao criar avaliação',
+                'message' => $e->getMessage()
+            ], 400);
         }
-
-        // Verificar se o usuário participou da transação
-        $canReview = ($donationItem->user_id === $userId && $donationItem->donated_to_user_id === $request->reviewed_user_id) ||
-                     ($donationItem->donated_to_user_id === $userId && $donationItem->user_id === $request->reviewed_user_id);
-
-        if (!$canReview) {
-            return response()->json([
-                'error' => 'Você só pode avaliar usuários com quem teve uma transação'
-            ], 422);
-        }
-
-        // Verificar se já existe uma avaliação
-        $existingReview = Review::where('donation_item_id', $request->donation_item_id)
-            ->where('reviewer_id', $userId)
-            ->where('reviewed_user_id', $request->reviewed_user_id)
-            ->first();
-
-        if ($existingReview) {
-            return response()->json([
-                'error' => 'Você já avaliou este usuário para esta doação'
-            ], 422);
-        }
-
-        $review = Review::create([
-            'donation_item_id' => $request->donation_item_id,
-            'reviewer_id' => $userId,
-            'reviewed_user_id' => $request->reviewed_user_id,
-            'rating' => $request->rating,
-            'comment' => $request->comment,
-        ]);
-
-        $review->load(['reviewer', 'reviewedUser', 'donationItem']);
-
-        return response()->json([
-            'message' => 'Avaliação criada com sucesso',
-            'data' => $review
-        ], 201);
     }
 
     /**
@@ -145,17 +150,28 @@ class ReviewController extends Controller
      *     ),
      *     @OA\Response(
      *         response=200,
-     *         description="Detalhes da avaliação"
+     *         description="Dados da avaliação",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="data", type="object",
+     *                 @OA\Property(property="id", type="integer"),
+     *                 @OA\Property(property="rating", type="integer"),
+     *                 @OA\Property(property="comment", type="string"),
+     *                 @OA\Property(property="reviewer", ref="#/components/schemas/User"),
+     *                 @OA\Property(property="reviewed_user", ref="#/components/schemas/User"),
+     *                 @OA\Property(property="donation_item", ref="#/components/schemas/DonationItem"),
+     *                 @OA\Property(property="created_at", type="string", format="date-time")
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=404,
+     *         description="Avaliação não encontrada"
      *     )
      * )
      */
-    public function show(Review $review)
+    public function show(Review $review): JsonResponse
     {
-        $review->load(['reviewer', 'reviewedUser', 'donationItem']);
-
-        return response()->json([
-            'data' => $review
-        ]);
+        return response()->json(['data' => $review]);
     }
 
     /**
@@ -173,44 +189,47 @@ class ReviewController extends Controller
      *     @OA\RequestBody(
      *         required=true,
      *         @OA\JsonContent(
-     *             @OA\Property(property="rating", type="integer", minimum=1, maximum=5),
-     *             @OA\Property(property="comment", type="string")
+     *             @OA\Property(property="rating", type="integer", example=4),
+     *             @OA\Property(property="comment", type="string", example="Boa pessoa, recomendo!")
      *         )
      *     ),
      *     @OA\Response(
      *         response=200,
-     *         description="Avaliação atualizada com sucesso"
+     *         description="Avaliação atualizada com sucesso",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Avaliação atualizada com sucesso"),
+     *             @OA\Property(property="data", type="object",
+     *                 @OA\Property(property="id", type="integer"),
+     *                 @OA\Property(property="rating", type="integer"),
+     *                 @OA\Property(property="comment", type="string"),
+     *                 @OA\Property(property="reviewer", ref="#/components/schemas/User"),
+     *                 @OA\Property(property="reviewed_user", ref="#/components/schemas/User"),
+     *                 @OA\Property(property="donation_item", ref="#/components/schemas/DonationItem")
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=403,
+     *         description="Sem permissão para modificar esta avaliação",
+     *         @OA\JsonContent(ref="#/components/schemas/Error")
      *     )
      * )
      */
-    public function update(Request $request, Review $review)
+    public function update(UpdateReviewRequest $request, Review $review): JsonResponse
     {
-        // Verificar se o usuário é o autor da avaliação
-        if ($review->reviewer_id !== $request->user()->id) {
+        try {
+            $review = $this->reviewService->update($review, $request->user(), $request->validated());
+
             return response()->json([
-                'error' => 'Não autorizado'
+                'message' => 'Avaliação atualizada com sucesso',
+                'data' => $review
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Erro ao atualizar avaliação',
+                'message' => $e->getMessage()
             ], 403);
         }
-
-        $validator = Validator::make($request->all(), [
-            'rating' => 'sometimes|integer|min:1|max:5',
-            'comment' => 'sometimes|nullable|string|max:1000',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'error' => 'Dados inválidos',
-                'messages' => $validator->errors()
-            ], 422);
-        }
-
-        $review->update($request->only(['rating', 'comment']));
-        $review->load(['reviewer', 'reviewedUser', 'donationItem']);
-
-        return response()->json([
-            'message' => 'Avaliação atualizada com sucesso',
-            'data' => $review
-        ]);
     }
 
     /**
@@ -227,24 +246,32 @@ class ReviewController extends Controller
      *     ),
      *     @OA\Response(
      *         response=200,
-     *         description="Avaliação excluída com sucesso"
+     *         description="Avaliação excluída com sucesso",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Avaliação excluída com sucesso")
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=403,
+     *         description="Sem permissão para excluir esta avaliação",
+     *         @OA\JsonContent(ref="#/components/schemas/Error")
      *     )
      * )
      */
-    public function destroy(Request $request, Review $review)
+    public function destroy(Review $review, Request $request): JsonResponse
     {
-        // Verificar se o usuário é o autor da avaliação
-        if ($review->reviewer_id !== $request->user()->id) {
+        try {
+            $this->reviewService->delete($review, $request->user());
+
             return response()->json([
-                'error' => 'Não autorizado'
+                'message' => 'Avaliação excluída com sucesso'
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Erro ao excluir avaliação',
+                'message' => $e->getMessage()
             ], 403);
         }
-
-        $review->delete();
-
-        return response()->json([
-            'message' => 'Avaliação excluída com sucesso'
-        ]);
     }
 
     /**
@@ -258,36 +285,52 @@ class ReviewController extends Controller
      *         required=true,
      *         @OA\Schema(type="integer")
      *     ),
+     *     @OA\Parameter(
+     *         name="page",
+     *         in="query",
+     *         @OA\Schema(type="integer", example=1)
+     *     ),
+     *     @OA\Parameter(
+     *         name="per_page",
+     *         in="query",
+     *         @OA\Schema(type="integer", example=15)
+     *     ),
      *     @OA\Response(
      *         response=200,
-     *         description="Avaliações do usuário"
+     *         description="Avaliações e estatísticas do usuário",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="reviews", type="object",
+     *                 @OA\Property(property="data", type="array", @OA\Items(
+     *                     @OA\Property(property="id", type="integer"),
+     *                     @OA\Property(property="rating", type="integer"),
+     *                     @OA\Property(property="comment", type="string"),
+     *                     @OA\Property(property="reviewer", ref="#/components/schemas/User"),
+     *                     @OA\Property(property="donation_item", ref="#/components/schemas/DonationItem"),
+     *                     @OA\Property(property="created_at", type="string", format="date-time")
+     *                 ))
+     *             ),
+     *             @OA\Property(property="stats", type="object",
+     *                 @OA\Property(property="total_reviews", type="integer"),
+     *                 @OA\Property(property="average_rating", type="number"),
+     *                 @OA\Property(property="rating_distribution", type="object")
+     *             )
+     *         )
      *     )
      * )
      */
-    public function userReviews(User $user)
+    public function userReviews(User $user, Request $request): JsonResponse
     {
-        $reviews = $user->reviewsReceived()
-            ->with(['reviewer', 'donationItem'])
-            ->latest()
-            ->paginate(15);
+        try {
+            $perPage = $request->get('per_page', 15);
+            $result = $this->reviewService->getUserReviews($user, $perPage);
 
-        $stats = [
-            'average_rating' => $user->average_rating,
-            'total_reviews' => $user->total_reviews,
-            'rating_distribution' => [
-                '5' => $user->reviewsReceived()->byRating(5)->count(),
-                '4' => $user->reviewsReceived()->byRating(4)->count(),
-                '3' => $user->reviewsReceived()->byRating(3)->count(),
-                '2' => $user->reviewsReceived()->byRating(2)->count(),
-                '1' => $user->reviewsReceived()->byRating(1)->count(),
-            ]
-        ];
-
-        return response()->json([
-            'user' => $user,
-            'stats' => $stats,
-            'reviews' => $reviews
-        ]);
+            return response()->json($result);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Erro interno do servidor',
+                'message' => $e->getMessage()
+            ], 500);
+        }
     }
 }
 
