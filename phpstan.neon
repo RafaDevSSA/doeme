@@ -1,0 +1,19 @@
+parameters:
+    level: 5
+    paths:
+        - app
+        - config
+        - database
+        - routes
+    excludePaths:
+        - app/Console/Kernel.php
+        - app/Exceptions/Handler.php
+        - app/Http/Kernel.php
+        - app/Providers/RouteServiceProvider.php
+    ignoreErrors:
+        - '#Unsafe usage of new static#'
+        - '#PHPDoc tag @var#'
+    checkMissingIterableValueType: false
+    checkGenericClassInNonGenericObjectType: false
+    reportUnmatchedIgnoredErrors: false
+

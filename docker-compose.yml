@@ -1,0 +1,86 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: doe-me-api
+    restart: unless-stopped
+    working_dir: /var/www
+    volumes:
+      - ./:/var/www
+      - ./docker/nginx/default.conf:/etc/nginx/sites-available/default
+    ports:
+      - "8000:80"
+    networks:
+      - doe-me-network
+    depends_on:
+      - db
+      - redis
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - DB_CONNECTION=pgsql
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_DATABASE=doe_me
+      - DB_USERNAME=doe_me_user
+      - DB_PASSWORD=doe_me_password
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CACHE_DRIVER=redis
+      - SESSION_DRIVER=redis
+      - QUEUE_CONNECTION=redis
+
+  db:
+    image: postgres:16-alpine
+    container_name: doe-me-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: doe_me
+      POSTGRES_USER: doe_me_user
+      POSTGRES_PASSWORD: doe_me_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - doe-me-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: doe-me-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - doe-me-network
+    command: redis-server --appendonly yes
+
+  nginx:
+    image: nginx:alpine
+    container_name: doe-me-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./:/var/www
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - app
+    networks:
+      - doe-me-network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  doe-me-network:
+    driver: bridge
+
